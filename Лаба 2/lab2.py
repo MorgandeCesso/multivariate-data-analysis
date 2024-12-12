@@ -1,38 +1,115 @@
-# Import necessary libraries
+import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-from sklearn.cluster import KMeans
+from sklearn.metrics import silhouette_score
 
-# Truncated data for demonstration
-data_truncated = pd.DataFrame({
-    "X": [
-        34.35, 40.81, 34.43, 26.34, 21.86, 20.94, 20.37, 13.67, 50.89, 17.29, 37.33,
-        19.88, 41.07, 16.89, 49.03, 27.46, 31.91, 36.66, 33.13, 18.84
-    ],
-    "Y": [
-        33.92, 41.33, 32.54, 31.99, 31.49, 24.46, 37.41, 31.42, 24.2, 43.01, 23.4,
-        29.85, 30.85, 33.19, 26.02, 26.09, 25.99, 36.1, 18.91, 31.39
-    ]
-})
+# Загрузка данных
+data = pd.read_excel("Lab2Data.xlsx")
+points = data[['x', 'y']].values
 
-# Clustering with KMeans
-num_clusters = 3
-kmeans = KMeans(n_clusters=num_clusters, random_state=42)
-data_truncated['Cluster'] = kmeans.fit_predict(data_truncated[['X', 'Y']])
+# Функция вычисления расстояния
+def distance(a, b, metric='euclidean'):
+    if metric == 'euclidean':
+        return np.sqrt(np.sum((a - b)**2))
+    elif metric == 'manhattan':
+        return np.sum(np.abs(a - b))
+    elif metric == 'chebyshev':
+        return np.max(np.abs(a - b))
+    else:
+        raise ValueError("Неизвестная метрика")
 
-# Plotting the results
-plt.figure(figsize=(8, 6))
-for cluster in range(num_clusters):
-    cluster_data = data_truncated[data_truncated['Cluster'] == cluster]
-    plt.scatter(cluster_data['X'], cluster_data['Y'], label=f'Cluster {cluster}')
+# Алгоритм k-средних
+def k_means(points, k, metric='euclidean', max_iter=100, tol=1e-4):
+    np.random.seed(42)
+    centers = points[np.random.choice(points.shape[0], k, replace=False)]
+    
+    for iteration in range(max_iter):
+        clusters = [[] for _ in range(k)]
+        for p in points:
+            dists = [distance(p, c, metric) for c in centers]
+            cluster_idx = np.argmin(dists)
+            clusters[cluster_idx].append(p)
 
-# Mark centroids
-centroids = kmeans.cluster_centers_
-plt.scatter(centroids[:, 0], centroids[:, 1], c='black', marker='x', s=100, label='Centroids')
+        clusters = [np.array(c) for c in clusters if len(c) > 0]
+        if len(clusters) < k:
+            centers = points[np.random.choice(points.shape[0], k, replace=False)]
+            continue
 
-plt.title('KMeans Clustering Example')
-plt.xlabel('X')
-plt.ylabel('Y')
-plt.legend()
-plt.grid()
+        new_centers = np.array([np.mean(c, axis=0) for c in clusters])
+        shift = np.sqrt(np.sum((centers - new_centers)**2))
+        centers = new_centers
+        if shift < tol:
+            break
+
+    return clusters, centers
+
+# Расчет статистики кластеров
+def cluster_statistics(clusters, centers, metric='euclidean'):
+    total_variance = 0.0
+    cluster_stats = []
+    
+    for i, cluster in enumerate(clusters):
+        dists = np.array([distance(p, centers[i], metric) for p in cluster])
+        variance = np.mean(dists**2)
+        radius = np.max(dists)
+        total_variance += np.sum(dists**2)
+        cluster_stats.append({
+            'cluster': i+1,
+            'variance': variance,
+            'radius': radius
+        })
+
+    return cluster_stats, total_variance
+
+# Визуализация результатов и расчет метрик
+k_values = [2, 3, 4]
+metrics = ['euclidean', 'manhattan', 'chebyshev']
+results = []
+
+# Сначала выполняем все вычисления и выводим результаты
+for i, metric in enumerate(metrics):
+    for j, k in enumerate(k_values):
+        clusters, centers = k_means(points, k, metric=metric)
+        c_stats, total_var = cluster_statistics(clusters, centers, metric=metric)
+
+        silhouette = silhouette_score(points, np.concatenate([[idx] * len(c) for idx, c in enumerate(clusters)]))
+        
+        results.append({
+            'metric': metric,
+            'k': k,
+            'cluster_statistics': c_stats,
+            'total_variance': total_var,
+            'silhouette': silhouette,
+            'centers': centers,
+            'clusters': clusters  # Сохраняем кластеры для последующей визуализации
+        })
+
+# Вывод результатов
+for res in results:
+    print(f"=== Метрика: {res['metric'].capitalize()}, K={res['k']} ===")
+    print("Центроиды:")
+    for idx, center in enumerate(res['centers']):
+        print(f"  Центроид {idx+1}: x={center[0]:.4f}, y={center[1]:.4f}")
+    for c_stat in res['cluster_statistics']:
+        print(f"Кластер {c_stat['cluster']}: Дисперсия={c_stat['variance']:.4f}, Радиус={c_stat['radius']:.4f}")
+    print(f"Суммарное квадратичное отклонение={res['total_variance']:.4f}")
+    print(f"Силуэтный коэффициент={res['silhouette']:.4f}\n")
+
+# Затем создаем визуализацию
+fig, axes = plt.subplots(len(metrics), len(k_values), figsize=(15, 12))
+fig.suptitle('Результаты кластеризации K-средних для разных метрик', fontsize=16)
+
+for idx, res in enumerate(results):
+    i = idx // len(k_values)
+    j = idx % len(k_values)
+    
+    ax = axes[i, j]
+    colors = plt.colormaps.get_cmap('tab10')(np.linspace(0, 1, res['k']))
+    for cluster_idx, cluster in enumerate(res['clusters']):
+        ax.scatter(cluster[:, 0], cluster[:, 1], s=20, color=colors[cluster_idx], label=f'Кластер {cluster_idx+1}')
+    ax.scatter(res['centers'][:, 0], res['centers'][:, 1], s=200, color='black', marker='x', label='Центроиды')
+    ax.set_title(f'Метрика: {"Евклидова" if res["metric"] == "euclidean" else "Манхэттена" if res["metric"] == "manhattan" else "Чебышева"}, k={res["k"]}\nОбщий коэффициент силуэта={res["silhouette"]:.2f}')
+    ax.legend()
+
+plt.tight_layout(rect=(0, 0, 1, 0.95))
 plt.show()
